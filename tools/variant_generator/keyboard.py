@@ -39,3 +39,4 @@ def keyboard_variants(word: str) -> list[str]:
                 variants.append(variant)
 
     return variants
+
