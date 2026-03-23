@@ -1,0 +1,335 @@
+products:
+  - id: audit
+    canonical_name: "AudIT"
+    description: "IT audit and compliance management for MSPs"
+    meilisearch_index: "AudIT"
+    abbreviations: []
+
+  - id: autotask_psa
+    canonical_name: "Autotask PSA"
+    description: "Professional Services Automation platform for MSP ticketing, billing, and project management"
+    meilisearch_index: "Autotask"
+    abbreviations:
+      - PSA
+      - Autotask
+    full_expansion: "Professional Services Automation"
+
+  - id: billing
+    canonical_name: "Kaseya Billing"
+    description: "Kaseya billing management platform for MSPs"
+    meilisearch_index: "Billing"
+    abbreviations:
+      - Billing
+
+  - id: bms_vorex
+    canonical_name: "BMS/Vorex"
+    description: "Business Management System PSA platform for MSPs, also known as Vorex"
+    meilisearch_index: "BMS_Vorex"
+    abbreviations:
+      - BMS
+      - Vorex
+    full_expansion: "Business Management System"
+
+  - id: bullphish_id
+    canonical_name: "BullPhish ID"
+    description: "Phishing simulation and security awareness training platform for MSPs"
+    meilisearch_index: "BullPhish_ID"
+    abbreviations:
+      - BullPhish
+      - BPID
+
+  - id: compliance_manager_grc
+    canonical_name: "Compliance Manager GRC"
+    description: "Governance, risk, and compliance management platform for MSPs"
+    meilisearch_index: "Compliance_Manager_GRC"
+    abbreviations:
+      - CM GRC
+      - CMGRC
+      - GRC
+    full_expansion: "Governance Risk and Compliance"
+
+  - id: connectbooster
+    canonical_name: "ConnectBooster"
+    description: "Payment automation and accounts receivable platform for MSPs"
+    meilisearch_index: "ConnectBooster"
+    abbreviations:
+      - CB
+
+  - id: cyber_hawk
+    canonical_name: "Cyber Hawk"
+    description: "Network security monitoring and insider threat detection tool for MSPs"
+    meilisearch_index: "Cyber_Hawk"
+    abbreviations:
+      - CH
+
+  - id: dark_web_id
+    canonical_name: "Dark Web ID"
+    description: "Dark web monitoring for compromised credentials and data breach detection"
+    meilisearch_index: "Dark_Web_ID"
+    abbreviations:
+      - DWID
+      - Dark Web
+
+  - id: datto_backup_entra_id
+    canonical_name: "Datto Backup for Microsoft Entra ID"
+    description: "Backup and recovery for Microsoft Entra ID identities and directory objects"
+    meilisearch_index: "Datto_Backup_for_Microsoft_Entra_ID"
+    abbreviations:
+      - Datto Entra Backup
+      - Datto AAD Backup
+
+  - id: datto_commerce
+    canonical_name: "Datto Commerce"
+    description: "Datto's partner commerce and hardware procurement platform for MSPs"
+    meilisearch_index: null
+    abbreviations:
+      - Commerce
+
+  - id: datto_bcdr
+    canonical_name: "Datto BCDR"
+    description: "Business continuity and disaster recovery appliance and cloud platform for SMBs"
+    meilisearch_index: "Datto_BCDR"
+    abbreviations:
+      - BCDR
+      - DBCDR
+    full_expansion: "Business Continuity and Disaster Recovery"
+
+  - id: datto_edr
+    canonical_name: "Datto EDR"
+    description: "Endpoint detection and response for managed threat visibility and response"
+    meilisearch_index: "Datto_EDR"
+    abbreviations:
+      - EDR
+      - DEDR
+    full_expansion: "Endpoint Detection and Response"
+
+  - id: datto_endpoint_backup_v2
+    canonical_name: "Datto Endpoint Backup V2"
+    description: "Second-generation Datto Endpoint Backup with enhanced performance and features"
+    meilisearch_index: "Datto_Endpoint_Backup_V2"
+    abbreviations:
+      - DEB V2
+      - DEB2
+      - DEB
+
+  - id: datto_file_protection
+    canonical_name: "Datto File Protection"
+    description: "File-level backup and recovery for business data on Windows devices"
+    meilisearch_index: "Datto_File_Protection"
+    abbreviations:
+      - DFP
+
+  - id: datto_networking
+    canonical_name: "Datto Networking"
+    description: "Managed networking hardware for MSPs including routers, switches, access points, and managed power"
+    meilisearch_index: "Datto_Networking"
+    abbreviations:
+      - Datto AP
+      - Datto WiFi
+      - Datto Routers
+      - Datto Switches
+      - Datto Access Points
+      - Datto PoE
+      - DNM
+
+  - id: datto_partner_portal
+    canonical_name: "Datto Partner Portal"
+    description: "MSP-facing portal for managing Datto products, licensing, billing, and support"
+    meilisearch_index: "Datto_Partner_Portal"
+    abbreviations:
+      - DPP
+      - Partner Portal
+
+  - id: datto_rmm
+    canonical_name: "Datto RMM"
+    description: "Remote monitoring and management platform for MSPs"
+    meilisearch_index: "Datto_RMM"
+    abbreviations:
+      - DRMM
+      - RMM
+    full_expansion: "Remote Monitoring and Management"
+
+  - id: datto_saas_defense
+    canonical_name: "Datto SaaS Defense"
+    description: "Advanced threat protection for Microsoft 365 and Google Workspace against malware and phishing"
+    meilisearch_index: "Datto_SaaS_Defense"
+    abbreviations:
+      - SaaS Defense
+      - DSD
+
+  - id: datto_saas_protection_google
+    canonical_name: "Datto SaaS Protection for Google Workspace"
+    description: "Backup and recovery for Google Workspace including Gmail, Drive, and Calendar"
+    meilisearch_index: "Datto_SaaS_Protection_Google_Workspace"
+    abbreviations:
+      - SaaS Protection Google
+      - DSP Google
+      - DSP GWS
+      - Datto Google Backup
+
+  - id: datto_saas_protection_m365
+    canonical_name: "Datto SaaS Protection for Microsoft 365"
+    description: "Backup and recovery for Microsoft 365 including Exchange, SharePoint, and OneDrive"
+    meilisearch_index: "Datto_SaaS_Protection_M365_Workspace"
+    abbreviations:
+      - SaaS Protection M365
+      - DSP M365
+      - DSP O365
+      - Datto O365 Backup
+      - Datto M365 Backup
+
+  - id: datto_secure_edge
+    canonical_name: "Datto Secure Edge"
+    description: "Secure access service edge networking solution for MSP-managed environments"
+    meilisearch_index: "Datto_Secure_Edge"
+    abbreviations:
+      - DSE
+      - Secure Edge
+    full_expansion: "Secure Access Service Edge"
+
+  - id: datto_workplace
+    canonical_name: "Datto Workplace"
+    description: "Secure file sync and share platform for MSP-managed businesses"
+    meilisearch_index: "Datto_Workplace"
+    abbreviations:
+      - DWP
+      - Workplace
+
+  - id: graphus
+    canonical_name: "Graphus"
+    description: "AI-powered automated phishing defense for Microsoft 365 and Google Workspace email"
+    meilisearch_index: "Graphus"
+    abbreviations: []
+
+  - id: inky
+    canonical_name: "INKY"
+    description: "Email security and phishing protection using computer vision and machine learning"
+    meilisearch_index: "INKY"
+    abbreviations: []
+
+  - id: it_glue
+    canonical_name: "IT Glue"
+    description: "IT documentation platform for MSPs to manage passwords, configurations, SOPs, and assets"
+    meilisearch_index: "IT_Glue"
+    abbreviations:
+      - ITG
+      - Glue
+
+  - id: kaseyaone
+    canonical_name: "KaseyaOne"
+    description: "Unified platform and single sign-on hub connecting all Kaseya products"
+    meilisearch_index: "KaseyaOne"
+    abbreviations:
+      - K1
+      - KOne
+
+  - id: kaseya_mdm
+    canonical_name: "Kaseya MDM"
+    description: "Mobile device management for enterprise and MSP-managed mobile fleets"
+    meilisearch_index: "Kaseya_MDM"
+    abbreviations:
+      - MDM
+      - KMDM
+    full_expansion: "Mobile Device Management"
+
+  - id: kaseya_siem
+    canonical_name: "Kaseya SIEM"
+    description: "Security information and event management platform for MSPs"
+    meilisearch_index: "Kaseya_SIEM"
+    abbreviations:
+      - SIEM
+      - KSIEM
+    full_expansion: "Security Information and Event Management"
+
+  - id: network_detective
+    canonical_name: "Network Detective"
+    description: "Network assessment and automated documentation tool for MSPs"
+    meilisearch_index: "Network_Detective"
+    abbreviations:
+      - ND
+      - NetDetective
+
+  - id: rocketcyber
+    canonical_name: "RocketCyber"
+    description: "Managed SOC and MDR platform providing 24/7 threat monitoring and response for MSPs"
+    meilisearch_index: "RocketCyber"
+    abbreviations:
+      - RC
+      - Rocket Cyber
+      - MDR
+      - SOC
+
+  - id: saas_alerts
+    canonical_name: "SaaS Alerts"
+    description: "SaaS application security monitoring and alerting for Microsoft 365 and Google Workspace"
+    meilisearch_index: "SaaS_Alerts"
+    abbreviations:
+      - SA
+
+  - id: spanning_backup
+    canonical_name: "Spanning Backup"
+    description: "Cloud-to-cloud backup and recovery by Spanning for Google Workspace, Microsoft 365, and Salesforce"
+    meilisearch_index: "Spanning_Backup"
+    abbreviations:
+      - Spanning
+      - Spanning Google
+      - Spanning M365
+      - Spanning O365
+      - Spanning Salesforce
+      - Spanning GWS
+
+  - id: traverse
+    canonical_name: "Traverse"
+    description: "Network performance monitoring and IT infrastructure management platform"
+    meilisearch_index: "Traverse"
+    abbreviations: []
+
+  - id: unitrends
+    canonical_name: "Unitrends"
+    description: "Enterprise backup and disaster recovery platform by Unitrends"
+    meilisearch_index: "Unitrends"
+    abbreviations:
+      - UT
+
+  - id: unitrends_unified_backup
+    canonical_name: "Unitrends Unified Backup"
+    description: "Comprehensive unified backup and disaster recovery solution by Unitrends"
+    meilisearch_index: "Unitrends_Unified_Backup"
+    abbreviations:
+      - UUB
+      - Unitrends Backup
+
+  - id: vpentest
+    canonical_name: "vPenTest"
+    description: "Automated internal and external network penetration testing platform by Vonahi Security"
+    meilisearch_index: "Vonahi"
+    abbreviations:
+      - VPT
+      - Vonahi
+      - Pen Test
+
+  - id: vsa_9
+    canonical_name: "VSA 9"
+    description: "Kaseya VSA version 9 remote monitoring and management platform for MSPs"
+    meilisearch_index: "VSA_9"
+    abbreviations:
+      - VSA9
+      - Kaseya VSA 9
+    full_expansion: "Virtual System Administrator"
+
+  - id: vsa_x
+    canonical_name: "VSA X"
+    description: "Next-generation Kaseya VSA remote monitoring and management platform"
+    meilisearch_index: "VSA_X"
+    abbreviations:
+      - VSA
+      - VSAX
+      - Kaseya VSA
+
+  - id: vulscan
+    canonical_name: "VulScan"
+    description: "Vulnerability scanning and risk management platform for MSP-managed networks"
+    meilisearch_index: "VulScan"
+    abbreviations:
+      - VS
+      - Vuln Scan
