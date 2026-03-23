@@ -2,3 +2,4 @@
 .env
 /tasks/
 tools/variant_generator/__pycache__/
+tools/variant_generator/tests/__pycache__/
