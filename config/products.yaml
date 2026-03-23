@@ -13,6 +13,9 @@ products:
       - PSA
       - Autotask
     full_expansion: "Professional Services Automation"
+    slang:
+      - atask
+      - autotask psa
 
   - id: billing
     canonical_name: "Kaseya Billing"
@@ -93,6 +96,11 @@ products:
       - BCDR
       - DBCDR
     full_expansion: "Business Continuity and Disaster Recovery"
+    slang:
+      - siris
+      - alto
+      - bdr
+      - datto backup
 
   - id: datto_edr
     canonical_name: "Datto EDR"
@@ -148,6 +156,9 @@ products:
       - DRMM
       - RMM
     full_expansion: "Remote Monitoring and Management"
+    slang:
+      - datto remote
+      - rmm tool
 
   - id: datto_saas_defense
     canonical_name: "Datto SaaS Defense"
@@ -214,6 +225,10 @@ products:
     abbreviations:
       - ITG
       - Glue
+    slang:
+      - the glue
+      - itg docs
+      - it docs
 
   - id: kaseyaone
     canonical_name: "KaseyaOne"
@@ -222,6 +237,11 @@ products:
     abbreviations:
       - K1
       - KOne
+    slang:
+      - kone
+      - k-one
+      - kaseya portal
+      - kaseya sso
 
   - id: kaseya_mdm
     canonical_name: "Kaseya MDM"
@@ -258,6 +278,10 @@ products:
       - Rocket Cyber
       - MDR
       - SOC
+    slang:
+      - rocket
+      - managed soc
+      - soc platform
 
   - id: saas_alerts
     canonical_name: "SaaS Alerts"
@@ -307,6 +331,10 @@ products:
       - VPT
       - Vonahi
       - Pen Test
+    slang:
+      - pentest
+      - pen testing
+      - vuln test
 
   - id: vsa_9
     canonical_name: "VSA 9"
@@ -325,6 +353,10 @@ products:
       - VSA
       - VSAX
       - Kaseya VSA
+    slang:
+      - the vsa
+      - kaseya rmm
+      - new vsa
 
   - id: vulscan
     canonical_name: "VulScan"
