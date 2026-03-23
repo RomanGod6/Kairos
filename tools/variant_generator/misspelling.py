@@ -3,8 +3,9 @@ def transposition_variants(word: str) -> list[str]:
     word = word.lower()
     for i, char in enumerate(word[:-1]):
         if word[i] != word[i+1]:
-            transposed_word = word[:i] + word[i+1] + char + word[i+2:]
-            variants.append(transposed_word)
+            if word[i] != word[i+1] and word[i] != ' ' and word[i+1] != ' ':
+                transposed_word = word[:i] + word[i+1] + char + word[i+2:]
+                variants.append(transposed_word)
 
     return variants
 
