@@ -1,0 +1,1068 @@
+# Kairos — Zero-Shot Product Classification Engine
+
+## Kaseya AI Recognition & Orchestrated Selection
+
+**Purpose:** Classify incoming Ada AI chat messages to the correct Kaseya product (42 products) with sub-50ms latency, near-zero per-request cost, and 95%+ accuracy.
+
+**Architecture:** Three parallel classification pipelines with weighted score aggregation and a rare LLM fallback.
+
+---
+
+## System Architecture
+
+```
+                        User Message (from Ada)
+                               │
+                    ┌──────────┼──────────┐
+                    │          │          │
+                    ▼          ▼          ▼
+              ┌──────────┐ ┌────────┐ ┌───────────┐
+              │ Pipeline 1│ │Pipeline│ │ Pipeline 3│
+              │  Regex /  │ │   2    │ │ Trained   │
+              │  Fuzzy    │ │ Meili  │ │ Classifier│
+              │  Matcher  │ │ Search │ │  (ONNX)   │
+              └─────┬─────┘ └───┬────┘ └─────┬─────┘
+                    │           │             │
+                    │  [(product, score), ...]│
+                    │           │             │
+                    └───────────┼─────────────┘
+                                │
+                         ┌──────▼──────┐
+                         │    Score    │
+                         │ Aggregator  │
+                         └──────┬──────┘
+                                │
+                     ┌──────────▼──────────┐
+                     │  Confidence > 0.80? │
+                     └──────────┬──────────┘
+                          yes /   \ no
+                             /     \
+                   Return Top K   LLM Tiebreaker
+                   Products       (rare, ~5% of requests)
+                                       │
+                                  Return Top K
+                                  Products
+```
+
+**Target Latency Budget (all pipelines run concurrently):**
+
+| Component | Expected Latency |
+|---|---|
+| Pipeline 1: Regex/Fuzzy | < 1ms |
+| Pipeline 2: Meilisearch Federated | 5-15ms |
+| Pipeline 3: ONNX Classifier | 2-5ms |
+| Score Aggregation | < 1ms |
+| **Total (p95)** | **< 20ms** |
+| LLM Fallback (when triggered) | 500-2000ms |
+
+---
+
+## Component Design
+
+### 1. Variant Generator (Offline Tool)
+
+A CLI tool that takes a canonical product name and generates all possible matching patterns. Run once per product, output reviewed and stored as the matching database for Pipeline 1.
+
+**Input:** A product name string (e.g., `"Datto BCDR"`)
+
+**Output Categories:**
+
+| Category | Description | Example for "Datto BCDR" |
+|---|---|---|
+| `exact` | Case variations | `datto bcdr`, `DATTO BCDR` |
+| `acronyms` | Initial-based abbreviations | `BCDR`, `DBCDR`, `bcdr` |
+| `expanded` | Full expansion of abbreviations | `datto business continuity disaster recovery` |
+| `abbreviations` | Partial names users commonly type | `datto bc`, `datto backup` |
+| `split_forms` | Space-separated components | `bc dr`, `datto bc dr` |
+| `misspellings` | Character transpositions + common errors | `dato bcdr`, `datto bcrd` |
+| `keyboard_proximity` | Adjacent-key substitutions | `dstto bcdr`, `fatto bcdr` |
+| `phonetic` | Sound-alike variations | `dato`, `daddo` |
+| `slang` | Informal references | `datto backup`, `the backup thing` |
+| `regex_patterns` | Compiled patterns for flexible matching | `d[a]?tt?o\s*b\.?c\.?d\.?r\.?` |
+
+**Keyboard Adjacency Model:**
+
+```
+Layout graph (QWERTY):
+
+  q─w─e─r─t─y─u─i─o─p
+   ╲│╱╲│╱╲│╱╲│╱╲│╱╲│╱╲│╱╲│╱╲│╱
+  a─s─d─f─g─h─j─k─l
+   ╲│╱╲│╱╲│╱╲│╱╲│╱╲│╱╲│╱
+    z─x─c─v─b─n─m
+
+Each key maps to its physical neighbors.
+For each character in the product name, generate variants
+by substituting each adjacent key.
+
+Data structure: dict[str, list[str]]
+  "d" → ["s", "e", "r", "f", "x", "c"]
+  "a" → ["q", "w", "s", "z"]
+  etc.
+```
+
+**Transposition Engine:**
+
+```
+For "datto":
+  Swap adjacent pairs:
+    adtto, dtato, datto, datot
+  Double-letter reduction:
+    dato (users drop the double t)
+  Double-letter expansion:
+    dattto (users sometimes over-type)
+```
+
+**Phonetic Engine:**
+
+```
+Rules:
+  tt → t (dato)
+  d → dd (daddo)  
+  o → oh (dattoh)
+  Trailing vowel drop (datt)
+  
+Use Soundex or Metaphone as baseline,
+then add product-specific overrides.
+```
+
+**Output Format:**
+
+```json
+{
+  "canonical": "Datto BCDR",
+  "product_id": "datto_bcdr",
+  "variants": {
+    "exact": ["Datto BCDR", "datto bcdr", "DATTO BCDR"],
+    "acronyms": ["BCDR", "bcdr", "DBCDR"],
+    "expanded": [
+      "datto business continuity disaster recovery",
+      "business continuity disaster recovery",
+      "datto backup and disaster recovery"
+    ],
+    "abbreviations": ["datto bc", "datto backup", "dat bcdr"],
+    "split_forms": ["datto bc dr", "bc dr"],
+    "misspellings": ["dato bcdr", "datto bcrd", "datto bdcr"],
+    "keyboard_proximity": ["dstto bcdr", "fatto bcdr", "datto bcfr"],
+    "phonetic": ["dato", "daddo", "dahto"],
+    "slang": ["datto backup", "datto dr", "the backup thing"],
+    "regex_patterns": [
+      "d[a]?tt?o\\s*b\\.?c\\.?d\\.?r\\.?",
+      "b\\.?c\\.?d\\.?r\\.?"
+    ]
+  },
+  "fuzzy_config": {
+    "algorithm": "levenshtein",
+    "max_distance": 2,
+    "min_similarity": 0.75
+  }
+}
+```
+
+**Storage:** All 42 product variant files stored as JSON. Loaded into memory on service startup. Total size will be small (< 1MB for all products combined).
+
+**Review Workflow:** Generator produces candidates → human reviews and prunes nonsense → approved variants saved. Re-run when products are added or renamed.
+
+---
+
+### 2. Pipeline 1 — Regex & Fuzzy Matcher
+
+**Purpose:** Catch explicit product mentions — when users actually name or nearly name the product.
+
+**Matching Strategy (executed in order, short-circuit on high-confidence match):**
+
+```
+Step 1: Exact match against all variant strings
+        → Found? Return product with score 1.0
+
+Step 2: Regex match against compiled patterns
+        → Matched? Return product with score 0.90
+
+Step 3: Fuzzy match (Levenshtein) against all variants
+        → Score > threshold? Return product with similarity score
+        → Multiple matches? Return all above threshold
+
+Step 4: Token overlap — split message into tokens,
+        check for partial matches against variant tokens
+        → Return products with token overlap ratio as score
+```
+
+**Data Structures:**
+
+```
+On startup, build:
+
+1. exact_lookup: dict[str, str]
+   Lowercased variant string → product_id
+   Used for O(1) exact matching
+
+2. compiled_regex: list[tuple[Pattern, str]]
+   Pre-compiled regex patterns paired with product_id
+   Iterated on each message
+
+3. variant_tokens: dict[str, set[str]]
+   product_id → set of all individual tokens from all variants
+   Used for token overlap scoring
+
+4. all_variants: dict[str, list[str]]
+   product_id → flat list of all variant strings
+   Used for fuzzy distance calculation
+```
+
+**Scoring Output:**
+
+```python
+@dataclass
+class PipelineResult:
+    product_id: str
+    score: float          # 0.0 - 1.0
+    match_type: str       # "exact", "regex", "fuzzy", "token_overlap"
+    matched_variant: str  # which variant string triggered the match
+```
+
+Returns `list[PipelineResult]` sorted by score descending.
+
+**Performance Notes:**
+
+- Exact lookup is a hash map — O(1)
+- Regex is the most expensive step — 42 patterns to check. Pre-compile all patterns on startup. Consider combining into a single alternation pattern if performance becomes an issue.
+- Fuzzy matching against all variants is O(n * m) where n = message length, m = total variants. For 42 products with ~50 variants each, that's ~2100 comparisons. Still sub-millisecond.
+- This entire pipeline should complete in < 1ms
+
+---
+
+### 3. Pipeline 2 — Meilisearch Federated Search
+
+**Purpose:** Match based on topic/content similarity against KB articles, even when the user never mentions a product name.
+
+**How It Works:**
+
+```
+1. Send user message as federated search query across all 42 KB indexes
+2. Meilisearch returns top K results with relevance scores and source index
+3. Aggregate results by source index (index = product)
+4. Score each product by weighted frequency in results
+```
+
+**Query:**
+
+```python
+# Single federated search call
+results = meili_client.multi_search([
+    {"indexUid": index, "q": user_message, "limit": 3}
+    for index in all_product_indexes
+])
+```
+
+Or if Meilisearch federation handles this natively, one call with federation config.
+
+**Scoring Logic:**
+
+```python
+def score_meilisearch_results(results, top_k=10):
+    """
+    Take the top K results across all indexes.
+    Score each product by:
+      - How many of the top K results came from its index (frequency)
+      - The relevance scores of those results (quality)
+    """
+    product_scores = defaultdict(float)
+    
+    # Only look at top K results globally
+    top_results = sorted(results, key=lambda r: r["_rankingScore"], reverse=True)[:top_k]
+    
+    for hit in top_results:
+        product_id = hit["indexUid"]  # or however the index maps to product
+        product_scores[product_id] += hit["_rankingScore"]
+    
+    # Normalize to 0-1 range
+    max_score = max(product_scores.values()) if product_scores else 1.0
+    normalized = {k: v / max_score for k, v in product_scores.items()}
+    
+    return sorted(normalized.items(), key=lambda x: x[1], reverse=True)
+```
+
+**Confidence Signal:**
+
+The gap between the top-scored product and the second-place product is the confidence indicator:
+
+```
+Top product score: 0.92
+2nd product score: 0.45
+Gap: 0.47 → High confidence (clear winner)
+
+Top product score: 0.71
+2nd product score: 0.68
+Gap: 0.03 → Low confidence (ambiguous)
+```
+
+This gap value should be included in the pipeline output for the aggregator to use.
+
+**Performance Notes:**
+
+- Single network call to Meilisearch
+- Meilisearch is built in Rust, optimized for exactly this workload
+- Expected latency: 5-15ms depending on index sizes
+- This is the slowest pipeline of the three but still fast
+
+---
+
+### 4. Pipeline 3 — Trained Classifier Model
+
+**Purpose:** Classify the message using patterns learned from training data. Handles the ambiguous middle ground that exact matching and search miss.
+
+#### 4a. Training Data Pipeline
+
+**Source:** Meilisearch KB articles (already labeled by product via their index).
+
+**Data Generation Strategy:**
+
+```
+Step 1: Extract all KB articles from all 42 product indexes
+        Fields: title, body text, tags/categories, product_id (from index)
+
+Step 2: Create training examples from KB content
+        - Titles as-is (already close to user query format)
+        - First sentence of each article
+        - Headers/subheaders extracted from body
+        - Tag values
+
+Step 3: Generate synthetic user queries (batch LLM call)
+        For each KB article, prompt an LLM to generate 10-20 
+        realistic ways a user might ask about this topic.
+        
+        Prompt: "Given this KB article title and summary about 
+        {product_name}, generate 15 different ways a real user 
+        might describe this problem or ask about this topic in 
+        a chat support widget. Include misspellings, vague 
+        descriptions, and incomplete sentences. Output as JSON array."
+
+Step 4: Combine all sources into training dataset
+        Format: list of (text, product_id) pairs
+        
+Step 5: Split 80/10/10 → train/validation/test
+        Stratified split to maintain class balance
+```
+
+**Expected Dataset Size:**
+
+```
+42 products
+× ~100-500 KB articles per product (estimate)
+× ~20 training examples per article (title + headers + synthetic)
+= ~84,000 - 420,000 training examples
+
+This is more than enough for a strong classifier.
+```
+
+**Class Imbalance Handling:**
+
+Some products will have significantly more KB articles than others. Options:
+
+1. Oversample minority classes during training
+2. Undersample majority classes to a cap
+3. Use class weights in the loss function (preferred — simplest, no data duplication)
+
+#### 4b. Model Architecture
+
+**Base Model:** `sentence-transformers/all-MiniLM-L6-v2` or `distilbert-base-uncased` with a classification head.
+
+```
+Input: tokenized user message (max 128 tokens — chat messages are short)
+    │
+    ▼
+┌─────────────────────────┐
+│  Pretrained Transformer  │
+│  (MiniLM-L6 or DistilBERT) │
+│  Frozen or fine-tuned    │
+└───────────┬─────────────┘
+            │
+         [CLS] embedding (384-dim or 768-dim)
+            │
+            ▼
+┌─────────────────────────┐
+│    Classification Head   │
+│    Linear(dim, 256)      │
+│    ReLU + Dropout(0.1)   │
+│    Linear(256, 42)       │
+│    Softmax               │
+└───────────┬─────────────┘
+            │
+            ▼
+     42 class probabilities
+```
+
+**Why MiniLM over DistilBERT:**
+
+- 6 layers vs 6 layers (similar depth)
+- 384-dim embeddings vs 768-dim (half the size, faster inference)
+- Specifically trained for semantic similarity (better for matching user queries to KB content)
+- ONNX export is well-supported
+
+**Training Config:**
+
+```yaml
+base_model: sentence-transformers/all-MiniLM-L6-v2
+max_seq_length: 128
+batch_size: 64
+learning_rate: 2e-5
+epochs: 5-10 (early stopping on validation loss)
+optimizer: AdamW
+scheduler: linear warmup (10% of steps) + linear decay
+loss: CrossEntropyLoss with class weights
+dropout: 0.1
+```
+
+#### 4c. Model Export & Serving
+
+**Export to ONNX:**
+
+```python
+# After training, export for fast CPU inference
+torch.onnx.export(
+    model,
+    dummy_input,
+    "kairos_classifier.onnx",
+    opset_version=14,
+    input_names=["input_ids", "attention_mask"],
+    output_names=["logits"],
+    dynamic_axes={
+        "input_ids": {0: "batch", 1: "seq_len"},
+        "attention_mask": {0: "batch", 1: "seq_len"},
+    }
+)
+```
+
+**INT8 Quantization (optional, for further speedup):**
+
+```python
+from onnxruntime.quantization import quantize_dynamic, QuantType
+
+quantize_dynamic(
+    "kairos_classifier.onnx",
+    "kairos_classifier_int8.onnx",
+    weight_type=QuantType.QInt8
+)
+```
+
+Expected inference: 2-5ms per request on CPU with ONNX Runtime.
+
+**Inference Output:**
+
+```python
+# Returns all 42 class probabilities
+# Take top K products with scores
+predictions = [
+    {"product_id": "datto_bcdr", "score": 0.91},
+    {"product_id": "it_glue", "score": 0.04},
+    {"product_id": "vsa", "score": 0.03},
+    ...
+]
+```
+
+---
+
+### 5. Score Aggregator
+
+**Purpose:** Merge results from all three pipelines into a single ranked product list.
+
+**Aggregation Strategy:**
+
+```python
+# Base weights (tunable)
+WEIGHTS = {
+    "regex_fuzzy": 0.40,
+    "meilisearch": 0.25,
+    "classifier": 0.35,
+}
+```
+
+**Dynamic Weight Adjustment:**
+
+The base weights shift depending on what each pipeline returns:
+
+```
+If Pipeline 1 has an exact match (score = 1.0):
+    → Boost regex_fuzzy weight to 0.70, reduce others
+    → Rationale: user explicitly named the product
+
+If Pipeline 1 returns nothing (no matches):
+    → Redistribute its weight to Pipeline 2 and 3
+    → regex_fuzzy: 0.0, meilisearch: 0.35, classifier: 0.65
+
+If Pipeline 2 confidence gap is very small (< 0.05):
+    → Reduce meilisearch weight (it's uncertain)
+    → Shift weight to classifier
+
+If Pipeline 3 top score is < 0.50:
+    → Classifier is uncertain, reduce its weight
+    → Shift weight to meilisearch
+```
+
+**Aggregation Logic:**
+
+```python
+def aggregate(
+    regex_results: list[PipelineResult],
+    search_results: list[tuple[str, float]],
+    classifier_results: list[tuple[str, float]],
+) -> list[tuple[str, float]]:
+    
+    # 1. Determine dynamic weights based on confidence signals
+    weights = compute_dynamic_weights(regex_results, search_results, classifier_results)
+    
+    # 2. Merge all scores by product
+    merged = defaultdict(float)
+    
+    for result in regex_results:
+        merged[result.product_id] += result.score * weights["regex_fuzzy"]
+    
+    for product_id, score in search_results:
+        merged[product_id] += score * weights["meilisearch"]
+    
+    for product_id, score in classifier_results:
+        merged[product_id] += score * weights["classifier"]
+    
+    # 3. Rank and return top K
+    ranked = sorted(merged.items(), key=lambda x: x[1], reverse=True)
+    return ranked
+```
+
+**Confidence Threshold:**
+
+```
+Final top score ≥ 0.80  →  HIGH confidence  →  Return result
+Final top score 0.50-0.80  →  MEDIUM confidence  →  Return result + flag for monitoring
+Final top score < 0.50  →  LOW confidence  →  Trigger LLM fallback
+```
+
+The threshold values are tunable. Start conservative (0.80), then lower as you validate accuracy.
+
+---
+
+### 6. LLM Fallback (Rare Path)
+
+**Triggered only when** the aggregator's top score is below the confidence threshold.
+
+**Implementation:** Send the user message plus the top 3-5 candidate products (from the aggregator) to an LLM. The LLM picks from the candidates rather than classifying from scratch — this is a reranking task, not open-ended classification.
+
+```
+Prompt:
+"A user sent this message to a support chat: '{user_message}'
+
+The most likely products this relates to are:
+1. {product_1} (score: {score_1}) — {brief_description}
+2. {product_2} (score: {score_2}) — {brief_description}
+3. {product_3} (score: {score_3}) — {brief_description}
+
+Which product is the user most likely asking about? 
+Return only the product name."
+```
+
+This is cheaper and faster than open-ended classification because the LLM only needs to pick from a shortlist, not reason about all 42 products.
+
+**Goal:** Keep LLM fallback to < 5% of total requests.
+
+---
+
+## API Design
+
+### Classification Endpoint
+
+```
+POST /api/v1/classify
+```
+
+**Request:**
+
+```json
+{
+  "message": "my backup schedule isnt running and i cant see the logs",
+  "top_k": 3,
+  "include_debug": false
+}
+```
+
+**Response:**
+
+```json
+{
+  "request_id": "req_abc123",
+  "latency_ms": 14,
+  "confidence": "high",
+  "results": [
+    {
+      "product_id": "datto_bcdr",
+      "product_name": "Datto BCDR",
+      "score": 0.89
+    },
+    {
+      "product_id": "unitrends",
+      "product_name": "Unitrends",
+      "score": 0.42
+    },
+    {
+      "product_id": "vsa",
+      "product_name": "VSA",
+      "score": 0.11
+    }
+  ],
+  "fallback_used": false
+}
+```
+
+**Debug Response (when `include_debug: true`):**
+
+```json
+{
+  "request_id": "req_abc123",
+  "latency_ms": 14,
+  "confidence": "high",
+  "results": [ ... ],
+  "fallback_used": false,
+  "debug": {
+    "pipeline_1_regex": {
+      "latency_ms": 0.3,
+      "matches": [
+        {"product_id": "datto_bcdr", "score": 0.0, "match_type": "none"}
+      ]
+    },
+    "pipeline_2_meilisearch": {
+      "latency_ms": 11,
+      "top_results": [
+        {"product_id": "datto_bcdr", "score": 0.82, "top_kb_article": "Backup Schedule Troubleshooting"},
+        {"product_id": "unitrends", "score": 0.65, "top_kb_article": "Scheduled Backup Failures"}
+      ],
+      "confidence_gap": 0.17
+    },
+    "pipeline_3_classifier": {
+      "latency_ms": 3,
+      "top_predictions": [
+        {"product_id": "datto_bcdr", "score": 0.91},
+        {"product_id": "unitrends", "score": 0.04}
+      ]
+    },
+    "aggregation": {
+      "weights_used": {"regex_fuzzy": 0.0, "meilisearch": 0.35, "classifier": 0.65},
+      "weight_adjustment_reason": "Pipeline 1 returned no matches, weight redistributed"
+    }
+  }
+}
+```
+
+### Variant Generator Endpoint (Admin)
+
+```
+POST /api/v1/admin/generate-variants
+```
+
+**Request:**
+
+```json
+{
+  "canonical_name": "Datto BCDR",
+  "product_id": "datto_bcdr",
+  "known_abbreviation": "BCDR",
+  "full_expansion": "Business Continuity Disaster Recovery"
+}
+```
+
+**Response:** Full variant object (see Variant Generator section above).
+
+### Health & Metrics
+
+```
+GET /api/v1/health
+```
+
+```json
+{
+  "status": "healthy",
+  "model_loaded": true,
+  "model_version": "v1.2.0",
+  "meilisearch_connected": true,
+  "variant_db_loaded": true,
+  "products_registered": 42,
+  "uptime_seconds": 86400
+}
+```
+
+```
+GET /api/v1/metrics
+```
+
+```json
+{
+  "total_requests": 150000,
+  "avg_latency_ms": 16.2,
+  "p95_latency_ms": 22.1,
+  "p99_latency_ms": 38.4,
+  "confidence_distribution": {
+    "high": 0.78,
+    "medium": 0.17,
+    "low": 0.05
+  },
+  "fallback_rate": 0.047,
+  "pipeline_agreement_rate": 0.82,
+  "top_ambiguous_products": [
+    {"pair": ["vsa", "rmm"], "confusion_count": 234},
+    {"pair": ["it_glue", "myglue"], "confusion_count": 189}
+  ]
+}
+```
+
+---
+
+## Project Structure
+
+```
+kairos/
+├── cmd/
+│   └── server/
+│       └── main.go                # Entry point
+├── internal/
+│   ├── api/
+│   │   ├── handler.go             # HTTP handlers
+│   │   ├── middleware.go           # Logging, auth, metrics
+│   │   └── router.go              # Route definitions
+│   ├── classifier/
+│   │   ├── model.go               # ONNX model loading & inference
+│   │   ├── tokenizer.go           # Tokenization (or call into Python)
+│   │   └── classifier.go          # Pipeline 3 interface
+│   ├── matcher/
+│   │   ├── exact.go               # Exact match lookup
+│   │   ├── regex.go               # Regex pattern matching
+│   │   ├── fuzzy.go               # Levenshtein / fuzzy matching
+│   │   ├── token_overlap.go       # Token overlap scoring
+│   │   └── matcher.go             # Pipeline 1 interface (orchestrates all)
+│   ├── search/
+│   │   ├── meilisearch.go         # Meilisearch client & federated query
+│   │   └── scorer.go              # Result aggregation by product index
+│   ├── aggregator/
+│   │   ├── weights.go             # Dynamic weight computation
+│   │   └── aggregator.go          # Score merging & ranking
+│   ├── fallback/
+│   │   └── llm.go                 # LLM reranker for low-confidence cases
+│   ├── products/
+│   │   ├── registry.go            # Product registry (loads variant JSON files)
+│   │   └── variants.go            # Variant data structures
+│   └── config/
+│       └── config.go              # Configuration loading
+├── tools/
+│   └── variant_generator/
+│       ├── main.py                # CLI entry point
+│       ├── generator.py           # Core generation logic
+│       ├── keyboard.py            # Keyboard adjacency model
+│       ├── phonetic.py            # Phonetic variant generation
+│       ├── misspelling.py         # Transposition & common error generation
+│       └── expander.py            # Abbreviation expansion
+├── training/
+│   ├── extract_kb_data.py         # Pull all KB articles from Meilisearch
+│   ├── generate_synthetic.py      # LLM-based synthetic query generation
+│   ├── prepare_dataset.py         # Combine, clean, split into train/val/test
+│   ├── train.py                   # Fine-tune classifier model
+│   ├── evaluate.py                # Evaluate on test set, confusion matrix
+│   ├── export_onnx.py             # Export trained model to ONNX
+│   └── quantize.py                # INT8 quantization
+├── data/
+│   ├── variants/                  # Generated variant JSON files (one per product)
+│   │   ├── datto_bcdr.json
+│   │   ├── it_glue.json
+│   │   ├── vsa.json
+│   │   └── ...
+│   ├── training/                  # Training datasets (gitignored)
+│   │   ├── raw/
+│   │   ├── synthetic/
+│   │   └── final/
+│   └── models/                    # Trained model artifacts (gitignored)
+│       ├── kairos_classifier.onnx
+│       └── kairos_classifier_int8.onnx
+├── config/
+│   ├── config.yaml                # Service configuration
+│   └── products.yaml              # Product registry (canonical names, IDs, descriptions)
+├── docker/
+│   ├── Dockerfile                 # Production image
+│   └── Dockerfile.training        # Training environment with Python + PyTorch
+├── Makefile
+├── go.mod
+├── go.sum
+└── README.md
+```
+
+**Language Split:**
+
+- **Go:** The entire runtime service (API, pipelines, aggregator, serving)
+- **Python:** Offline tooling only (variant generator, training pipeline, model export)
+- **No Python at runtime** — the trained model runs via ONNX Runtime's Go bindings
+
+---
+
+## Implementation Phases
+
+### Phase 1: Foundation & Variant Generator
+
+**Goal:** Build the offline tooling that generates the matching database.
+
+**Tasks:**
+
+```
+1.1  Set up project structure (Go module, Python virtualenv, directory layout)
+1.2  Create products.yaml with all 42 products (canonical name, ID, description, known abbreviations)
+1.3  Build keyboard adjacency graph (QWERTY layout → neighbor map)
+1.4  Build transposition engine (swap adjacent chars, double-letter reduction/expansion)
+1.5  Build phonetic variant generator (Soundex/Metaphone baseline + custom rules)
+1.6  Build abbreviation expander (input: abbreviation map, output: expanded forms)
+1.7  Build slang/informal generator (configurable per product)
+1.8  Build regex pattern generator (combine variants into flexible patterns)
+1.9  Wire all generators into CLI tool: input product name → output full variant JSON
+1.10 Run generator on all 42 products
+1.11 Manual review pass — prune bad variants, add missing ones
+1.12 Write tests for each generator component
+```
+
+**Deliverable:** `data/variants/` populated with reviewed JSON files for all 42 products.
+
+---
+
+### Phase 2: Pipeline 1 — Regex & Fuzzy Matcher
+
+**Goal:** Build the fastest pipeline. Exact matches, regex, fuzzy, and token overlap.
+
+**Tasks:**
+
+```
+2.1  Define PipelineResult struct and Pipeline interface in Go
+2.2  Build product registry loader (reads all variant JSON files on startup)
+2.3  Build exact match index (lowercase variant → product_id hash map)
+2.4  Build regex matcher (pre-compile all patterns on startup)
+2.5  Build fuzzy matcher (Levenshtein distance against all variant strings)
+2.6  Build token overlap scorer
+2.7  Wire all matchers into Pipeline 1 orchestrator (run in order, collect results)
+2.8  Benchmark: validate < 1ms latency on realistic inputs
+2.9  Write tests with known product mentions, misspellings, and edge cases
+```
+
+**Deliverable:** Working Pipeline 1 that returns scored product matches for any input string.
+
+---
+
+### Phase 3: Pipeline 2 — Meilisearch Integration
+
+**Goal:** Use federated search across all KB indexes as a classification signal.
+
+**Tasks:**
+
+```
+3.1  Set up Meilisearch client in Go
+3.2  Implement federated search call (query all indexes, get top K results)
+3.3  Build result scorer (aggregate by source index, normalize scores)
+3.4  Calculate confidence gap between top two products
+3.5  Handle edge cases: empty results, single-index results, timeout
+3.6  Benchmark latency against live Meilisearch instance
+3.7  Write tests with mock Meilisearch responses
+```
+
+**Deliverable:** Working Pipeline 2 that returns product scores from KB search relevance.
+
+---
+
+### Phase 4: Training Data Pipeline
+
+**Goal:** Extract KB data and generate a labeled dataset for the classifier.
+
+**Tasks:**
+
+```
+4.1  Write Meilisearch extraction script (pull all docs from all 42 indexes)
+4.2  Parse and clean article content (titles, headers, body text, tags)
+4.3  Create direct training examples from article titles and headers
+4.4  Build synthetic query generator (LLM batch call to generate user-like queries per article)
+4.5  Run synthetic generation across all products (budget: ~$5-15 in API costs)
+4.6  Combine all sources into unified dataset (text, product_id)
+4.7  Analyze class distribution, identify imbalanced products
+4.8  Stratified split into train/validation/test (80/10/10)
+4.9  Save as Parquet or CSV files in data/training/final/
+4.10 Document dataset statistics (total examples, per-class counts, avg length)
+```
+
+**Deliverable:** Clean, labeled, split dataset ready for model training.
+
+---
+
+### Phase 5: Pipeline 3 — Train & Deploy Classifier
+
+**Goal:** Train, evaluate, export, and integrate the classification model.
+
+**Tasks:**
+
+```
+5.1  Set up training environment (PyTorch, transformers, ONNX)
+5.2  Implement dataset loader with tokenization
+5.3  Build model: MiniLM base + classification head
+5.4  Implement training loop with class-weighted loss
+5.5  Train model, monitor validation loss for early stopping
+5.6  Evaluate on test set: accuracy, per-class precision/recall/F1
+5.7  Generate confusion matrix — identify commonly confused product pairs
+5.8  Iterate: augment training data for weak classes, retrain
+5.9  Export final model to ONNX
+5.10 Quantize to INT8, benchmark accuracy loss (should be negligible)
+5.11 Integrate ONNX Runtime in Go service
+5.12 Implement tokenizer in Go (or use a Go tokenizer library)
+5.13 Build Pipeline 3 interface: input message → output scored predictions
+5.14 Benchmark inference latency (target: < 5ms)
+5.15 Write integration tests
+```
+
+**Deliverable:** Working Pipeline 3 running ONNX model in Go with < 5ms inference.
+
+---
+
+### Phase 6: Score Aggregator & API
+
+**Goal:** Merge all pipeline results and expose the classification API.
+
+**Tasks:**
+
+```
+6.1  Implement static weight aggregation
+6.2  Implement dynamic weight adjustment logic
+6.3  Implement confidence thresholding (high/medium/low)
+6.4  Wire all three pipelines to run concurrently (goroutines)
+6.5  Build aggregator that collects results and produces final ranking
+6.6  Build HTTP handler for POST /api/v1/classify
+6.7  Build debug response format
+6.8  Build health and metrics endpoints
+6.9  Add request logging and latency tracking
+6.10 End-to-end integration test: message in → ranked products out
+6.11 Load test: validate performance under concurrent requests
+```
+
+**Deliverable:** Complete API returning classified products with < 20ms p95 latency.
+
+---
+
+### Phase 7: LLM Fallback & Polish
+
+**Goal:** Handle low-confidence cases and production-harden the service.
+
+**Tasks:**
+
+```
+7.1  Implement LLM fallback client (Azure OpenAI or Anthropic API)
+7.2  Build reranking prompt with candidate products from aggregator
+7.3  Implement fallback trigger (only when confidence < threshold)
+7.4  Add fallback latency to response
+7.5  Rate limiting and circuit breaker for LLM calls
+7.6  Dockerfile for production deployment
+7.7  Configuration via environment variables and config file
+7.8  Structured logging (JSON format for log aggregation)
+7.9  Graceful shutdown handling
+7.10 README with setup, configuration, and deployment instructions
+```
+
+**Deliverable:** Production-ready service with LLM fallback for edge cases.
+
+---
+
+### Phase 8: Evaluation & Tuning
+
+**Goal:** Validate accuracy on real traffic and optimize.
+
+**Tasks:**
+
+```
+8.1  Collect sample of real Ada chat messages (manually labeled with correct product)
+8.2  Run evaluation suite: measure accuracy, precision, recall per product
+8.3  Identify failure modes: which products are most confused?
+8.4  Tune aggregation weights based on evaluation results
+8.5  Tune confidence threshold to minimize fallback rate while maintaining accuracy
+8.6  A/B test against current Kairos implementation (if applicable)
+8.7  Monitor fallback rate in production — target < 5%
+8.8  Set up feedback loop: log low-confidence cases for review and retraining
+8.9  Document per-product accuracy and known weaknesses
+```
+
+**Deliverable:** Validated, tuned system with documented accuracy metrics.
+
+---
+
+## Configuration
+
+```yaml
+# config/config.yaml
+
+server:
+  port: 8080
+  read_timeout: 5s
+  write_timeout: 5s
+
+pipelines:
+  regex_fuzzy:
+    enabled: true
+    variants_dir: "./data/variants"
+    fuzzy_min_similarity: 0.75
+    fuzzy_max_distance: 2
+  
+  meilisearch:
+    enabled: true
+    host: "http://meilisearch:7700"
+    api_key: "${MEILI_API_KEY}"
+    search_limit: 10          # top K results to analyze
+    timeout: 500ms
+  
+  classifier:
+    enabled: true
+    model_path: "./data/models/kairos_classifier_int8.onnx"
+    tokenizer: "sentence-transformers/all-MiniLM-L6-v2"
+    max_seq_length: 128
+    top_k: 5
+
+aggregator:
+  base_weights:
+    regex_fuzzy: 0.40
+    meilisearch: 0.25
+    classifier: 0.35
+  confidence_thresholds:
+    high: 0.80
+    low: 0.50
+  dynamic_weighting: true
+
+fallback:
+  enabled: true
+  provider: "anthropic"       # or "azure_openai"
+  model: "claude-sonnet-4-20250514"
+  timeout: 3s
+  max_retries: 1
+
+logging:
+  level: "info"
+  format: "json"
+
+metrics:
+  enabled: true
+  path: "/api/v1/metrics"
+```
+
+---
+
+## Success Criteria
+
+| Metric | Target |
+|---|---|
+| Overall accuracy (top-1) | ≥ 95% |
+| Overall accuracy (top-3) | ≥ 99% |
+| p95 latency (without fallback) | < 20ms |
+| p95 latency (with fallback) | < 2000ms |
+| LLM fallback rate | < 5% |
+| Cost per classification | ~$0.00 (LLM fallback only) |
+| Cold start time | < 5s (model + variant loading) |
+| Memory footprint | < 500MB |
+
+---
+
+## Future Considerations
+
+- **Feedback loop:** Log all classifications with confidence scores. Flag low-confidence results for human review. Use corrections as additional training data. Retrain classifier periodically.
+- **Product additions:** When a new product is added (product 43+), run variant generator, add KB articles to Meilisearch, retrain classifier with new class. Pipelines 1 and 2 can be updated without retraining.
+- **Multi-label classification:** Some messages might relate to multiple products (e.g., integration between BMS and IT Glue). Consider supporting multi-label output in a future version.
+- **Contextual classification:** Use conversation history (previous messages in the chat) as additional context for classification. Requires changes to the API contract and model architecture.
